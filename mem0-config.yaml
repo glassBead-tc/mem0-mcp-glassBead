@@ -1,0 +1,103 @@
+# Mem0 MCP Server Configuration
+# This file demonstrates the extensible configuration system
+
+api:
+  key: ${MEM0_API_KEY}  # Can use environment variables
+  host: https://api.mem0.ai
+  timeout: 30
+  version: v2
+
+organization:
+  org_id: ${MEM0_ORG_ID:}  # Optional with default empty
+  project_id: ${MEM0_PROJECT_ID:}
+
+defaults:
+  user_id: cursor_mcp  # Default user for backward compatibility
+  page_size: 100
+  custom_instructions: |
+    Extract the Following Information:
+    - Code Snippets: Save the actual code for future reference.
+    - Explanation: Document a clear description of what the code does and how it works.
+    - Related Technical Details: Include information about the programming language, dependencies, and system specifications.
+    - Key Features: Highlight the main functionalities and important aspects of the snippet.
+  custom_categories:
+    - code
+    - documentation
+    - configuration
+    - example
+    - pattern
+
+features:
+  graph_memory: true
+  multimodal: true
+  webhooks: false
+  batch_operations: true
+  export_import: true
+  async_operations: true
+
+# Plugin configuration
+plugins:
+  # Paths to search for custom plugins
+  paths:
+    - ./custom_plugins
+    - ${HOME}/.mem0/plugins
+  
+  # Python modules to import plugins from
+  modules: []
+    # - mem0_mcp.plugins  # Built-in plugins are loaded automatically
+  
+  # Plugin-specific configuration
+  config:
+    logging_middleware:
+      log_level: INFO
+      log_sensitive: false
+    
+    cache_plugin:
+      ttl: 300  # Cache TTL in seconds
+      max_size: 1000
+      cacheable_operations:
+        - search
+        - get
+        - get_all
+    
+    neo4j_backend:
+      url: ${NEO4J_URL:bolt://localhost:7687}
+      username: ${NEO4J_USERNAME:neo4j}
+      password: ${NEO4J_PASSWORD:password}
+      database: neo4j
+
+# Performance settings
+performance:
+  use_async: true
+  max_concurrent: 10
+  request_timeout: 30
+  cache_enabled: true
+
+# Graph store configuration (if graph memory is enabled)
+graph_store:
+  provider: neo4j  # Can be neo4j, networkx, etc.
+  config:
+    url: ${NEO4J_URL:bolt://localhost:7687}
+    username: ${NEO4J_USERNAME:neo4j}
+    password: ${NEO4J_PASSWORD:password}
+    database: neo4j
+
+# Webhook configuration
+webhooks:
+  enabled: false
+  endpoints:
+    - url: https://example.com/webhook
+      events:
+        - memory.added
+        - memory.updated
+        - memory.deleted
+      headers:
+        Authorization: Bearer ${WEBHOOK_TOKEN:}
+
+# Logging configuration
+logging:
+  level: INFO
+  format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+  handlers:
+    - console
+    - file: ./logs/mem0-mcp.log

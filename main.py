@@ -1,23 +1,39 @@
-from mcp.server.fastmcp import FastMCP
-from starlette.applications import Starlette
-from mcp.server.sse import SseServerTransport
-from starlette.requests import Request
-from starlette.routing import Mount, Route
-from mcp.server import Server
-import uvicorn
-from mem0 import MemoryClient
-from dotenv import load_dotenv
-import json
+"""
+Mem0 MCP Server - Backward Compatible Entry Point
 
-load_dotenv()
+This maintains compatibility with the original 3-tool interface while
+providing access to the new extensible architecture.
+"""
 
-# Initialize FastMCP server for mem0 tools
-mcp = FastMCP("mem0-mcp")
+import os
+import sys
+import argparse
 
-# Initialize mem0 client and set default user
-mem0_client = MemoryClient()
-DEFAULT_USER_ID = "cursor_mcp"
-CUSTOM_INSTRUCTIONS = """
+# Check if we should use the enhanced implementation
+USE_ENHANCED = os.environ.get("MEM0_MCP_ENHANCED", "false").lower() == "true"
+
+if USE_ENHANCED or "--enhanced" in sys.argv:
+    # Use the enhanced implementation
+    from main_enhanced import main
+    if __name__ == "__main__":
+        # Remove --enhanced from argv if present
+        if "--enhanced" in sys.argv:
+            sys.argv.remove("--enhanced")
+        main()
+else:
+    # Use the original FastMCP implementation
+    from mcp.server.fastmcp import FastMCP
+    from mem0 import MemoryClient
+    from dotenv import load_dotenv
+    import json
+
+    load_dotenv()
+
+    # Initialize mem0 client during module import
+    print("Initializing mem0 client...")
+    try:
+        mem0_client = MemoryClient()
+        CUSTOM_INSTRUCTIONS = """
 Extract the Following Information:  
 
 - Code Snippets: Save the actual code for future reference.  
@@ -25,144 +41,158 @@ Extract the Following Information:
 - Related Technical Details: Include information about the programming language, dependencies, and system specifications.  
 - Key Features: Highlight the main functionalities and important aspects of the snippet.
 """
-mem0_client.update_project(custom_instructions=CUSTOM_INSTRUCTIONS)
-
-@mcp.tool(
-    description="""Add a new coding preference to mem0. This tool stores code snippets, implementation details,
-    and coding patterns for future reference. Store every code snippet. When storing code, you should include:
-    - Complete code with all necessary imports and dependencies
-    - Language/framework version information (e.g., "Python 3.9", "React 18")
-    - Full implementation context and any required setup/configuration
-    - Detailed comments explaining the logic, especially for complex sections
-    - Example usage or test cases demonstrating the code
-    - Any known limitations, edge cases, or performance considerations
-    - Related patterns or alternative approaches
-    - Links to relevant documentation or resources
-    - Environment setup requirements (if applicable)
-    - Error handling and debugging tips
-    The preference will be indexed for semantic search and can be retrieved later using natural language queries."""
-)
-async def add_coding_preference(text: str) -> str:
-    """Add a new coding preference to mem0.
-
-    This tool is designed to store code snippets, implementation patterns, and programming knowledge.
-    When storing code, it's recommended to include:
-    - Complete code with imports and dependencies
-    - Language/framework information
-    - Setup instructions if needed
-    - Documentation and comments
-    - Example usage
-
-    Args:
-        text: The content to store in memory, including code, documentation, and context
-    """
-    try:
-        messages = [{"role": "user", "content": text}]
-        mem0_client.add(messages, user_id=DEFAULT_USER_ID, output_format="v1.1")
-        return f"Successfully added preference: {text}"
+        mem0_client.update_project(custom_instructions=CUSTOM_INSTRUCTIONS)
+        print("mem0 client initialized successfully")
     except Exception as e:
-        return f"Error adding preference: {str(e)}"
+        print(f"Failed to initialize mem0 client: {e}")
+        raise
 
-@mcp.tool(
-    description="""Retrieve all stored coding preferences for the default user. Call this tool when you need 
-    complete context of all previously stored preferences. This is useful when:
-    - You need to analyze all available code patterns
-    - You want to check all stored implementation examples
-    - You need to review the full history of stored solutions
-    - You want to ensure no relevant information is missed
-    Returns a comprehensive list of:
-    - Code snippets and implementation patterns
-    - Programming knowledge and best practices
-    - Technical documentation and examples
-    - Setup and configuration guides
-    Results are returned in JSON format with metadata."""
-)
-async def get_all_coding_preferences() -> str:
-    """Get all coding preferences for the default user.
+    DEFAULT_USER_ID = "cursor_mcp"
 
-    Returns a JSON formatted list of all stored preferences, including:
-    - Code implementations and patterns
-    - Technical documentation
-    - Programming best practices
-    - Setup guides and examples
-    Each preference includes metadata about when it was created and its content type.
-    """
-    try:
-        memories = mem0_client.get_all(user_id=DEFAULT_USER_ID, page=1, page_size=50)
-        flattened_memories = [memory["memory"] for memory in memories["results"]]
-        return json.dumps(flattened_memories, indent=2)
-    except Exception as e:
-        return f"Error getting preferences: {str(e)}"
+    # Initialize FastMCP server
+    mcp = FastMCP("mem0-mcp")
 
-@mcp.tool(
-    description="""Search through stored coding preferences using semantic search. This tool should be called 
-    for EVERY user query to find relevant code and implementation details. It helps find:
-    - Specific code implementations or patterns
-    - Solutions to programming problems
-    - Best practices and coding standards
-    - Setup and configuration guides
-    - Technical documentation and examples
-    The search uses natural language understanding to find relevant matches, so you can
-    describe what you're looking for in plain English. Always search the preferences before 
-    providing answers to ensure you leverage existing knowledge."""
-)
-async def search_coding_preferences(query: str) -> str:
-    """Search coding preferences using semantic search.
-
-    The search is powered by natural language understanding, allowing you to find:
-    - Code implementations and patterns
-    - Programming solutions and techniques
-    - Technical documentation and guides
-    - Best practices and standards
-    Results are ranked by relevance to your query.
-
-    Args:
-        query: Search query string describing what you're looking for. Can be natural language
-              or specific technical terms.
-    """
-    try:
-        memories = mem0_client.search(query, user_id=DEFAULT_USER_ID, output_format="v1.1")
-        flattened_memories = [memory["memory"] for memory in memories["results"]]
-        return json.dumps(flattened_memories, indent=2)
-    except Exception as e:
-        return f"Error searching preferences: {str(e)}"
-
-def create_starlette_app(mcp_server: Server, *, debug: bool = False) -> Starlette:
-    """Create a Starlette application that can server the provied mcp server with SSE."""
-    sse = SseServerTransport("/messages/")
-
-    async def handle_sse(request: Request) -> None:
-        async with sse.connect_sse(
-                request.scope,
-                request.receive,
-                request._send,  # noqa: SLF001
-        ) as (read_stream, write_stream):
-            await mcp_server.run(
-                read_stream,
-                write_stream,
-                mcp_server.create_initialization_options(),
-            )
-
-    return Starlette(
-        debug=debug,
-        routes=[
-            Route("/sse", endpoint=handle_sse),
-            Mount("/messages/", app=sse.handle_post_message),
-        ],
+    @mcp.tool(
+        description="""Add a new coding preference to mem0. This tool stores code snippets, implementation details,
+        and coding patterns for future reference. Store every code snippet. When storing code, you should include:
+        - Complete code with all necessary imports and dependencies
+        - Language/framework version information (e.g., "Python 3.9", "React 18")
+        - Full implementation context and any required setup/configuration
+        - Detailed comments explaining the logic, especially for complex sections
+        - Example usage or test cases demonstrating the code
+        - Any known limitations, edge cases, or performance considerations
+        - Related patterns or alternative approaches
+        - Links to relevant documentation or resources
+        - Environment setup requirements (if applicable)
+        - Error handling and debugging tips
+        The preference will be indexed for semantic search and can be retrieved later using natural language queries."""
     )
+    async def add_coding_preference(text: str) -> str:
+        """Add a new coding preference to mem0.
 
+        This tool is designed to store code snippets, implementation patterns, and programming knowledge.
+        All preferences are automatically enriched with metadata and indexed for semantic search.
 
-if __name__ == "__main__":
-    mcp_server = mcp._mcp_server
+        Args:
+            text: The coding preference to store. This should include the complete code snippet
+                  along with comprehensive context as described in the tool description.
 
-    import argparse
+        Returns:
+            str: Success message with the memory ID, or error message if the operation fails.
+        """
+        try:
+            # Add to memory for the default user
+            result = mem0_client.add(text, user_id=DEFAULT_USER_ID, output_format="v1.1")
+            
+            # Extract memory ID from the result
+            if result and 'memory' in result:
+                memory_id = result['memory'].get('id', 'unknown')
+                return f"Successfully added coding preference with memory ID: {memory_id}"
+            else:
+                return "Coding preference added successfully"
+                
+        except Exception as e:
+            return f"Error adding coding preference: {str(e)}"
 
-    parser = argparse.ArgumentParser(description='Run MCP SSE-based server')
-    parser.add_argument('--host', default='0.0.0.0', help='Host to bind to')
-    parser.add_argument('--port', type=int, default=8080, help='Port to listen on')
-    args = parser.parse_args()
+    @mcp.tool(
+        description="""Retrieve all stored coding preferences from mem0. Use this when you need to:
+        - Review all previously stored code snippets and patterns
+        - Analyze coding patterns and practices across different implementations
+        - Find specific implementations when you're not sure of the exact keywords
+        - Get a comprehensive overview of stored programming knowledge
+        - Ensure you haven't missed any relevant code that was previously saved
+        This returns all memories without filtering, which is useful for comprehensive analysis."""
+    )
+    async def get_all_coding_preferences() -> str:
+        """Retrieve all coding preferences stored in mem0.
 
-    # Bind SSE request handling to MCP server
-    starlette_app = create_starlette_app(mcp_server, debug=True)
+        This provides a complete view of all stored coding knowledge without any filtering.
+        Useful for comprehensive reviews and ensuring no relevant information is missed.
 
-    uvicorn.run(starlette_app, host=args.host, port=args.port)
+        Returns:
+            str: JSON formatted list of all coding preferences with their metadata,
+                 or error message if retrieval fails.
+        """
+        try:
+            # Get all memories for the default user
+            memories = mem0_client.get_all(user_id=DEFAULT_USER_ID, output_format="v1.1")
+            
+            if memories:
+                # Format the response for better readability
+                formatted_memories = []
+                for memory in memories:
+                    formatted_memory = {
+                        "id": memory.get("id", "unknown"),
+                        "content": memory.get("text", ""),
+                        "metadata": memory.get("metadata", {}),
+                        "created_at": memory.get("created_at", "")
+                    }
+                    formatted_memories.append(formatted_memory)
+                
+                return json.dumps(formatted_memories, indent=2)
+            else:
+                return "No coding preferences found"
+                
+        except Exception as e:
+            return f"Error retrieving coding preferences: {str(e)}"
+
+    @mcp.tool(
+        description="""Search for specific coding preferences using semantic search. Use this to find:
+        - Code implementations for specific features or problems
+        - Programming patterns for particular languages or frameworks
+        - Best practices and conventions you've previously stored
+        - Setup instructions or configuration examples
+        - Solutions to specific technical challenges
+        The search is semantic, so it understands context and meaning, not just keywords."""
+    )
+    async def search_coding_preferences(query: str) -> str:
+        """Search for coding preferences using semantic search.
+
+        This uses vector similarity to find the most relevant coding preferences based on
+        the meaning and context of your query, not just keyword matching.
+
+        Args:
+            query: Natural language description of what you're looking for.
+                   Can be a problem description, feature name, technology stack, etc.
+
+        Returns:
+            str: JSON formatted list of relevant coding preferences sorted by relevance,
+                 or error message if search fails.
+        """
+        try:
+            # Search memories for the default user
+            results = mem0_client.search(query, user_id=DEFAULT_USER_ID, output_format="v1.1")
+            
+            if results:
+                # Format the search results
+                formatted_results = []
+                for result in results:
+                    formatted_result = {
+                        "id": result.get("id", "unknown"),
+                        "content": result.get("text", ""),
+                        "metadata": result.get("metadata", {}),
+                        "relevance_score": result.get("score", 0)
+                    }
+                    formatted_results.append(formatted_result)
+                
+                return json.dumps(formatted_results, indent=2)
+            else:
+                return f"No coding preferences found matching: {query}"
+                
+        except Exception as e:
+            return f"Error searching coding preferences: {str(e)}"
+
+    if __name__ == "__main__":
+        # Parse command line arguments
+        parser = argparse.ArgumentParser(description='Mem0 MCP Server')
+        parser.add_argument('--host', type=str, help='Host to bind to (ignored for SSE)')
+        parser.add_argument('--port', type=int, help='Port to bind to (ignored for SSE)')
+        args = parser.parse_args()
+        
+        # Note: FastMCP with SSE transport ignores host/port arguments
+        # The server will always run on 0.0.0.0:8000 by default
+        print("Starting Mem0 MCP Server (Classic Mode)...")
+        print("Server will be available at http://0.0.0.0:8000/sse")
+        print("To use enhanced mode with 7 tools and plugin support, run with --enhanced flag")
+        
+        mcp.run(transport="sse")

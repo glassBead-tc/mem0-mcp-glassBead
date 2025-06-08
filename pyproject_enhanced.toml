@@ -1,7 +1,7 @@
 [project]
 name = "mem0-mcp"
-version = "0.2.0"
-description = "Extensible MCP server for Mem0 with plugin architecture"
+version = "0.1.0"
+description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
@@ -11,8 +11,6 @@ dependencies = [
     "PyYAML>=6.0",
     "starlette>=0.46.0",
     "uvicorn>=0.34.0",
-    "python-dotenv>=1.0.0",
-    "fastmcp>=0.1.0",
 ]
 
 [tool.setuptools.packages.find]
